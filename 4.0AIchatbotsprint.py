@@ -1454,8 +1454,6 @@ CSV data:
 
     else:
         st.info("Upload task data first to ask questions or generate insights.")
- task data to generate AI suggestions.")
-
 
 
 # Footer
