@@ -1357,7 +1357,7 @@ ai_tab = st.tabs(["6. AI Suggestions"])[0]
 
 with ai_tab:
     st.header("AI Suggestions and Insights")
-    st.markdown("Powered by Together.ai")
+    st.markdown("Powered by Puter.com (Free OpenAI Proxy)")
 
     # Initialize chat history in session state if not present
     if "ai_messages" not in st.session_state:
@@ -1370,8 +1370,8 @@ with ai_tab:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # API Key Input
-    api_key = st.text_input("Together.ai API Key", type="password", key="ai_api_key")
+    # API Key Input (optional for Puter)
+    api_key = st.text_input("Puter API Key (Optional)", type="password", key="ai_api_key")
 
     if st.session_state.df_tasks is None:
         st.info("Please upload task data in the Upload Tasks tab first.")
@@ -1379,39 +1379,32 @@ with ai_tab:
 
     # Extract component assignments from the data
     component_assignments = {}
-    if "Unnamed: 11" in st.session_state.df_tasks.columns:  # Column containing component info
+    if "Unnamed: 11" in st.session_state.df_tasks.columns:
         component_col = "Unnamed: 11"
     elif "Component" in st.session_state.df_tasks.columns:
         component_col = "Component"
     else:
         component_col = None
-        
+
     if component_col:
-        # Create a mapping of team members to their components
         for _, row in st.session_state.df_tasks.iterrows():
             if pd.notna(row["Assigned To"]) and pd.notna(row[component_col]):
                 if row["Assigned To"] not in component_assignments:
                     component_assignments[row["Assigned To"]] = set()
                 component_assignments[row["Assigned To"]].add(row[component_col])
 
-    # Convert DataFrame to CSV string for context
-    csv_string = st.session_state.df_tasks.to_csv(index=False)
-
     # Chat input
     if prompt := st.chat_input("Ask about your sprint plan..."):
-        # Add user message to chat history
         st.session_state.ai_messages.append({"role": "user", "content": prompt})
-        
-        # Display user message in chat message container
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Prepare the full context for the AI
+        # Context for the model
         context = f"""You are an expert sprint planning assistant. The user has provided their task data and is asking for help. 
 
 Task Data Overview:
 - Total tasks: {len(st.session_state.df_tasks)}
-- Team members: {', '.join(st.session_state.team_members.keys()) if st.session_state.team_members else 'Not specified'}
+- Team members: {', '.join(st.session_state.team_members.keys()) if 'team_members' in st.session_state else 'Not specified'}
 - Priorities: {', '.join(st.session_state.df_tasks['Priority'].unique()) if 'Priority' in st.session_state.df_tasks.columns else 'Not specified'}
 """
 
@@ -1434,89 +1427,84 @@ Sample task data (first 5 rows):
 {st.session_state.df_tasks.head().to_csv(index=False)}
 """
 
-        # Display assistant response in chat message container
         with st.chat_message("assistant"):
             message_placeholder = st.empty()
             full_response = ""
-            
-            if not api_key:
-                full_response = "Please enter your Together.ai API key to enable AI assistance."
-            else:
-                headers = {
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json"
-                }
 
-                body = {
-                    "model": "mistralai/Mixtral-8x7B-Instruct-v0.1",
-                    "messages": [{"role": "system", "content": context}] + 
-                                [msg for msg in st.session_state.ai_messages if msg["role"] != "assistant"],
-                    "temperature": 0.7,
-                    "max_tokens": 1500,
-                    "stream": True
-                }
+            headers = {
+                "Authorization": f"Bearer {api_key}" if api_key else "Bearer ",
+                "Content-Type": "application/json"
+            }
 
-                try:
-                    # Stream the response
-                    with requests.post(
-                        "https://api.together.xyz/v1/chat/completions",
-                        headers=headers,
-                        json=body,
-                        stream=True
-                    ) as response:
-                        if response.status_code == 200:
-                            for chunk in response.iter_lines():
-                                if chunk:
-                                    chunk_str = chunk.decode('utf-8')
-                                    if chunk_str.startswith("data:"):
-                                        try:
-                                            data = json.loads(chunk_str[5:])
-                                            if "choices" in data and data["choices"]:
-                                                delta = data["choices"][0].get("delta", {})
-                                                if "content" in delta:
-                                                    full_response += delta["content"]
-                                                    message_placeholder.markdown(full_response + "▌")
-                                        except json.JSONDecodeError:
-                                            continue
-                        else:
-                            full_response = f"Error: {response.status_code} - {response.text}"
-                except Exception as e:
-                    full_response = f"An error occurred: {str(e)}"
+            body = {
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "system", "content": context}] +
+                            [msg for msg in st.session_state.ai_messages if msg["role"] != "assistant"],
+                "temperature": 0.7,
+                "max_tokens": 1500,
+                "stream": True
+            }
+
+            try:
+                with requests.post(
+                    "https://api.puter.com/openai/v1/chat/completions",
+                    headers=headers,
+                    json=body,
+                    stream=True
+                ) as response:
+                    if response.status_code == 200:
+                        for chunk in response.iter_lines():
+                            if chunk:
+                                chunk_str = chunk.decode('utf-8')
+                                if chunk_str.startswith("data:"):
+                                    try:
+                                        data = json.loads(chunk_str[5:])
+                                        if "choices" in data and data["choices"]:
+                                            delta = data["choices"][0].get("delta", {})
+                                            if "content" in delta:
+                                                full_response += delta["content"]
+                                                message_placeholder.markdown(full_response + "▌")
+                                    except json.JSONDecodeError:
+                                        continue
+                    else:
+                        full_response = f"Error: {response.status_code} - {response.text}"
+            except Exception as e:
+                full_response = f"An error occurred: {str(e)}"
 
             message_placeholder.markdown(full_response)
 
-        # Add assistant response to chat history
+        # Save assistant message
         st.session_state.ai_messages.append({"role": "assistant", "content": full_response})
 
-    # Add some quick action buttons
+    # Quick actions
     st.markdown("### Quick Actions")
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         if st.button("Analyze Priority Distribution"):
             st.session_state.ai_messages.append({
-                "role": "user", 
+                "role": "user",
                 "content": "Analyze the priority distribution across team members and suggest improvements"
             })
             st.rerun()
-    
+
     with col2:
         if st.button("Check Component Balance"):
             st.session_state.ai_messages.append({
-                "role": "user", 
+                "role": "user",
                 "content": "Check if component assignments match team member expertise and suggest adjustments"
             })
             st.rerun()
-    
+
     with col3:
         if st.button("Identify Overloads"):
             st.session_state.ai_messages.append({
-                "role": "user", 
+                "role": "user",
                 "content": "Identify any team members who might be overloaded and suggest solutions"
             })
             st.rerun()
 
-    # Add a button to clear chat history
+    # Clear conversation
     if st.button("Clear Conversation"):
         st.session_state.ai_messages = [
             {"role": "assistant", "content": "Hello! I'm your sprint planning assistant. How can I help you with your task assignments today?"}
