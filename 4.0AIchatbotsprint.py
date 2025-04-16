@@ -1357,7 +1357,7 @@ ai_tab = st.tabs(["6. AI Suggestions"])[0]
 
 with ai_tab:
     st.header("AI Suggestions and Insights")
-    st.markdown("Powered by DeepSeek AI")
+    st.markdown("Powered by OpenRouter + OpenAI")
 
     if "ai_messages" not in st.session_state:
         st.session_state.ai_messages = [
@@ -1368,7 +1368,7 @@ with ai_tab:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    api_key = st.text_input("DeepSeek API Key", type="password", key="ai_api_key")
+    api_key = st.text_input("OpenRouter API Key", type="password", key="ai_api_key")
 
     if st.session_state.df_tasks is None:
         st.info("Please upload task data in the Upload Tasks tab first.")
@@ -1424,11 +1424,12 @@ Sample task data (first 5 rows):
 
             headers = {
                 "Authorization": f"Bearer {api_key}",
+                "HTTP-Referer": "https://localhost",  # Replace if hosted elsewhere
                 "Content-Type": "application/json"
             }
 
             body = {
-                "model": "deepseek-chat",
+                "model": "openai/gpt-3.5-turbo",  # Or gpt-4, gpt-4-turbo, etc.
                 "messages": [{"role": "system", "content": context}] +
                             [msg for msg in st.session_state.ai_messages if msg["role"] != "assistant"],
                 "temperature": 0.7,
@@ -1438,7 +1439,7 @@ Sample task data (first 5 rows):
 
             try:
                 with requests.post(
-                    "https://api.deepseek.com/v1/chat/completions",
+                    "https://openrouter.ai/api/v1/chat/completions",
                     headers=headers,
                     json=body,
                     stream=True
@@ -1498,6 +1499,7 @@ Sample task data (first 5 rows):
             {"role": "assistant", "content": "Hello! I'm your sprint planning assistant. How can I help you with your task assignments today?"}
         ]
         st.rerun()
+
 
 
 # Footer
