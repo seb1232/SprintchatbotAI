@@ -1370,17 +1370,18 @@ with ai_tab:
 
     api_key = st.text_input("OpenRouter API Key", type="password", key="ai_api_key")
 
-    if st.session_state.df_tasks is None:
-        st.info("Please upload task data in the Upload Tasks tab first.")
+    # Use task data from results if available
+    if "results" in st.session_state and "df" in st.session_state.results:
+        df = st.session_state.results["df"].copy()
+    elif "df_tasks" in st.session_state:
+        df = st.session_state.df_tasks.copy()
+    else:
+        st.info("Please upload and assign tasks first.")
         st.stop()
 
-    df = st.session_state.df_tasks.copy()
-
-    # 🔍 Extract component expertise from the task file
+    # --- Component Expertise Extraction ---
     expertise_col_member = "Unnamed: 15"
     expertise_col_comp = "Unnamed: 16"
-    component_col = None
-
     if expertise_col_member in df.columns and expertise_col_comp in df.columns:
         expertise_map = df[[expertise_col_member, expertise_col_comp]].dropna()
         expertise_map.columns = ["Member", "Expertise"]
@@ -1388,11 +1389,11 @@ with ai_tab:
     else:
         expertise_dict = {}
 
-    # 📦 Extract component name from Title (e.g., "Comp1: something")
+    # Extract component from title (e.g., "Comp1: blah")
     if "Title" in df.columns:
         df["Component"] = df["Title"].str.extract(r"(Comp\d+)", expand=False)
 
-    # 🧠 Analyze mismatches
+    # Detect mismatches
     df["Assigned To"] = df["Assigned To"].fillna("").str.strip()
     df["Mismatch"] = df.apply(
         lambda row: (
@@ -1404,18 +1405,16 @@ with ai_tab:
     )
     mismatches = df[df["Mismatch"]]
 
-    # 📬 User input
-    prompt = st.chat_input("Ask about your sprint plan or say 'fix component mismatches'...")
+    prompt = st.chat_input("Ask a question or say 'fix component mismatches'...")
 
     if prompt:
         st.session_state.ai_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # If user wants to fix mismatches
         if "fix" in prompt.lower() and "mismatch" in prompt.lower():
             with st.chat_message("assistant"):
-                st.success("Fixing tasks by component expertise...")
+                st.success("Reassigning tasks to match component expertise...")
                 reassigned = 0
                 for idx, row in mismatches.iterrows():
                     correct_member = next((m for m, c in expertise_dict.items() if c == row["Component"]), None)
@@ -1423,32 +1422,29 @@ with ai_tab:
                         df.at[idx, "Assigned To"] = correct_member
                         reassigned += 1
 
-                st.success(f"Reassigned {reassigned} mismatched tasks.")
+                st.session_state.results["df"] = df  # 🧠 Update the results table
+                st.success(f"✅ Reassigned {reassigned} tasks in your Results tab.")
                 st.dataframe(df[["ID", "Title", "Component", "Assigned To"]], use_container_width=True)
-
-                st.session_state.df_tasks = df  # Save back corrected
 
                 st.session_state.ai_messages.append({
                     "role": "assistant",
-                    "content": f"I found and reassigned {reassigned} tasks to match component expertise."
+                    "content": f"I reassigned {reassigned} tasks based on component expertise. Check the Results tab for updated assignments."
                 })
-
         else:
-            # 🧠 AI Context
+            # Normal AI chat reply
             context = f"""You are an expert sprint planning assistant.
 
-There are {len(df)} tasks. Component expertise is as follows:\n"""
-            for m, c in expertise_dict.items():
-                context += f"- {m} specializes in {c}\n"
+There are {len(df)} tasks. Component expertise is:
+""" + "\n".join([f"- {m} → {c}" for m, c in expertise_dict.items()])
 
             if not mismatches.empty:
-                context += "\n⚠️ Detected mismatches:\n"
-                for _, row in mismatches.iterrows():
-                    context += f"- Task '{row['Title']}' assigned to {row['Assigned To']} but it's {row['Component']}\n"
+                context += "\n\n⚠️ Mismatches:\n" + "\n".join(
+                    f"- {r['Title']} is {r['Component']} but assigned to {r['Assigned To']}"
+                    for _, r in mismatches.iterrows()
+                )
 
-            context += f"\nUser prompt: {prompt}"
+            context += f"\n\nUser Prompt: {prompt}"
 
-            # 🔁 Stream response from OpenRouter
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
                 full_response = ""
@@ -1497,7 +1493,7 @@ There are {len(df)} tasks. Component expertise is as follows:\n"""
                 message_placeholder.markdown(full_response)
                 st.session_state.ai_messages.append({"role": "assistant", "content": full_response})
 
-    # 🔁 Buttons
+    # Quick actions
     st.markdown("### Quick Actions")
     col1, col2, col3 = st.columns(3)
 
@@ -1530,7 +1526,6 @@ There are {len(df)} tasks. Component expertise is as follows:\n"""
             {"role": "assistant", "content": "Hello! I'm your sprint planning assistant. How can I help you with your task assignments today?"}
         ]
         st.rerun()
-
 
 
 
