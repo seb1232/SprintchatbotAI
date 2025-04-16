@@ -1374,99 +1374,130 @@ with ai_tab:
         st.info("Please upload task data in the Upload Tasks tab first.")
         st.stop()
 
-    component_assignments = {}
+    df = st.session_state.df_tasks.copy()
+
+    # 🔍 Extract component expertise from the task file
+    expertise_col_member = "Unnamed: 15"
+    expertise_col_comp = "Unnamed: 16"
     component_col = None
-    if "Unnamed: 11" in st.session_state.df_tasks.columns:
-        component_col = "Unnamed: 11"
-    elif "Component" in st.session_state.df_tasks.columns:
-        component_col = "Component"
 
-    if component_col:
-        for _, row in st.session_state.df_tasks.iterrows():
-            if pd.notna(row["Assigned To"]) and pd.notna(row[component_col]):
-                component_assignments.setdefault(row["Assigned To"], set()).add(row[component_col])
+    if expertise_col_member in df.columns and expertise_col_comp in df.columns:
+        expertise_map = df[[expertise_col_member, expertise_col_comp]].dropna()
+        expertise_map.columns = ["Member", "Expertise"]
+        expertise_dict = expertise_map.set_index("Member")["Expertise"].to_dict()
+    else:
+        expertise_dict = {}
 
-    if prompt := st.chat_input("Ask about your sprint plan..."):
+    # 📦 Extract component name from Title (e.g., "Comp1: something")
+    if "Title" in df.columns:
+        df["Component"] = df["Title"].str.extract(r"(Comp\d+)", expand=False)
+
+    # 🧠 Analyze mismatches
+    df["Assigned To"] = df["Assigned To"].fillna("").str.strip()
+    df["Mismatch"] = df.apply(
+        lambda row: (
+            row["Assigned To"] in expertise_dict and
+            pd.notna(row["Component"]) and
+            expertise_dict[row["Assigned To"]] != row["Component"]
+        ),
+        axis=1
+    )
+    mismatches = df[df["Mismatch"]]
+
+    # 📬 User input
+    prompt = st.chat_input("Ask about your sprint plan or say 'fix component mismatches'...")
+
+    if prompt:
         st.session_state.ai_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        context = f"""You are an expert sprint planning assistant. The user has provided their task data and is asking for help. 
+        # If user wants to fix mismatches
+        if "fix" in prompt.lower() and "mismatch" in prompt.lower():
+            with st.chat_message("assistant"):
+                st.success("Fixing tasks by component expertise...")
+                reassigned = 0
+                for idx, row in mismatches.iterrows():
+                    correct_member = next((m for m, c in expertise_dict.items() if c == row["Component"]), None)
+                    if correct_member:
+                        df.at[idx, "Assigned To"] = correct_member
+                        reassigned += 1
 
-Task Data Overview:
-- Total tasks: {len(st.session_state.df_tasks)}
-- Team members: {', '.join(st.session_state.team_members.keys()) if 'team_members' in st.session_state else 'Not specified'}
-- Priorities: {', '.join(st.session_state.df_tasks['Priority'].unique()) if 'Priority' in st.session_state.df_tasks.columns else 'Not specified'}
-"""
+                st.success(f"Reassigned {reassigned} mismatched tasks.")
+                st.dataframe(df[["ID", "Title", "Component", "Assigned To"]], use_container_width=True)
 
-        if component_assignments:
-            context += "\nComponent Assignments:\n"
-            for member, components in component_assignments.items():
-                context += f"- {member}: {', '.join(components)}\n"
+                st.session_state.df_tasks = df  # Save back corrected
 
-        context += f"""
-Current user question: {prompt}
+                st.session_state.ai_messages.append({
+                    "role": "assistant",
+                    "content": f"I found and reassigned {reassigned} tasks to match component expertise."
+                })
 
-When responding:
-1. Be concise but thorough
-2. Provide specific recommendations based on the data
-3. Highlight any potential issues
-4. Suggest optimizations
-5. Consider component expertise when relevant
+        else:
+            # 🧠 AI Context
+            context = f"""You are an expert sprint planning assistant.
 
-Sample task data (first 5 rows):
-{st.session_state.df_tasks.head().to_csv(index=False)}
-"""
+There are {len(df)} tasks. Component expertise is as follows:\n"""
+            for m, c in expertise_dict.items():
+                context += f"- {m} specializes in {c}\n"
 
-        with st.chat_message("assistant"):
-            message_placeholder = st.empty()
-            full_response = ""
+            if not mismatches.empty:
+                context += "\n⚠️ Detected mismatches:\n"
+                for _, row in mismatches.iterrows():
+                    context += f"- Task '{row['Title']}' assigned to {row['Assigned To']} but it's {row['Component']}\n"
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "HTTP-Referer": "https://localhost",  # Replace if hosted elsewhere
-                "Content-Type": "application/json"
-            }
+            context += f"\nUser prompt: {prompt}"
 
-            body = {
-                "model": "openai/gpt-3.5-turbo",  # Or gpt-4, gpt-4-turbo, etc.
-                "messages": [{"role": "system", "content": context}] +
-                            [msg for msg in st.session_state.ai_messages if msg["role"] != "assistant"],
-                "temperature": 0.7,
-                "max_tokens": 1500,
-                "stream": True
-            }
+            # 🔁 Stream response from OpenRouter
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                full_response = ""
 
-            try:
-                with requests.post(
-                    "https://openrouter.ai/api/v1/chat/completions",
-                    headers=headers,
-                    json=body,
-                    stream=True
-                ) as response:
-                    if response.status_code == 200:
-                        for chunk in response.iter_lines():
-                            if chunk:
-                                chunk_str = chunk.decode('utf-8')
-                                if chunk_str.startswith("data:"):
-                                    try:
-                                        data = json.loads(chunk_str[5:])
-                                        if "choices" in data and data["choices"]:
-                                            delta = data["choices"][0].get("delta", {})
-                                            if "content" in delta:
-                                                full_response += delta["content"]
-                                                message_placeholder.markdown(full_response + "▌")
-                                    except json.JSONDecodeError:
-                                        continue
-                    else:
-                        full_response = f"Error: {response.status_code} - {response.text}"
-            except Exception as e:
-                full_response = f"An error occurred: {str(e)}"
+                headers = {
+                    "Authorization": f"Bearer {api_key}",
+                    "HTTP-Referer": "https://localhost",
+                    "Content-Type": "application/json"
+                }
 
-            message_placeholder.markdown(full_response)
+                body = {
+                    "model": "openai/gpt-3.5-turbo",
+                    "messages": [{"role": "system", "content": context}] +
+                                [msg for msg in st.session_state.ai_messages if msg["role"] != "assistant"],
+                    "temperature": 0.7,
+                    "max_tokens": 1500,
+                    "stream": True
+                }
 
-        st.session_state.ai_messages.append({"role": "assistant", "content": full_response})
+                try:
+                    with requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        headers=headers,
+                        json=body,
+                        stream=True
+                    ) as response:
+                        if response.status_code == 200:
+                            for chunk in response.iter_lines():
+                                if chunk:
+                                    chunk_str = chunk.decode('utf-8')
+                                    if chunk_str.startswith("data:"):
+                                        try:
+                                            data = json.loads(chunk_str[5:])
+                                            if "choices" in data and data["choices"]:
+                                                delta = data["choices"][0].get("delta", {})
+                                                if "content" in delta:
+                                                    full_response += delta["content"]
+                                                    message_placeholder.markdown(full_response + "▌")
+                                        except json.JSONDecodeError:
+                                            continue
+                        else:
+                            full_response = f"Error: {response.status_code} - {response.text}"
+                except Exception as e:
+                    full_response = f"An error occurred: {str(e)}"
 
+                message_placeholder.markdown(full_response)
+                st.session_state.ai_messages.append({"role": "assistant", "content": full_response})
+
+    # 🔁 Buttons
     st.markdown("### Quick Actions")
     col1, col2, col3 = st.columns(3)
 
@@ -1482,15 +1513,15 @@ Sample task data (first 5 rows):
         if st.button("Check Component Balance"):
             st.session_state.ai_messages.append({
                 "role": "user",
-                "content": "Check if component assignments match team member expertise and suggest adjustments"
+                "content": "Check if component assignments match team member expertise"
             })
             st.rerun()
 
     with col3:
-        if st.button("Identify Overloads"):
+        if st.button("Fix Component Mismatches"):
             st.session_state.ai_messages.append({
                 "role": "user",
-                "content": "Identify any team members who might be overloaded and suggest solutions"
+                "content": "Fix component mismatches"
             })
             st.rerun()
 
@@ -1499,6 +1530,7 @@ Sample task data (first 5 rows):
             {"role": "assistant", "content": "Hello! I'm your sprint planning assistant. How can I help you with your task assignments today?"}
         ]
         st.rerun()
+
 
 
 
