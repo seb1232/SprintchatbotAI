@@ -1370,8 +1370,8 @@ with ai_tab:
 
     api_key = st.text_input("OpenRouter API Key", type="password", key="ai_api_key")
 
-    # Use task data from results if available
-    if "results" in st.session_state and "df" in st.session_state.results:
+    # ✅ Safely access task data
+    if "df" in st.session_state.get("results", {}):
         df = st.session_state.results["df"].copy()
     elif "df_tasks" in st.session_state:
         df = st.session_state.df_tasks.copy()
@@ -1379,7 +1379,7 @@ with ai_tab:
         st.info("Please upload and assign tasks first.")
         st.stop()
 
-    # --- Component Expertise Extraction ---
+    # 🔍 Extract expertise info from CSV columns
     expertise_col_member = "Unnamed: 15"
     expertise_col_comp = "Unnamed: 16"
     if expertise_col_member in df.columns and expertise_col_comp in df.columns:
@@ -1389,11 +1389,11 @@ with ai_tab:
     else:
         expertise_dict = {}
 
-    # Extract component from title (e.g., "Comp1: blah")
+    # Extract component from title (e.g., "Comp1: title")
     if "Title" in df.columns:
         df["Component"] = df["Title"].str.extract(r"(Comp\d+)", expand=False)
 
-    # Detect mismatches
+    # Detect component mismatches
     df["Assigned To"] = df["Assigned To"].fillna("").str.strip()
     df["Mismatch"] = df.apply(
         lambda row: (
@@ -1405,6 +1405,7 @@ with ai_tab:
     )
     mismatches = df[df["Mismatch"]]
 
+    # 🧠 Prompt input
     prompt = st.chat_input("Ask a question or say 'fix component mismatches'...")
 
     if prompt:
@@ -1422,26 +1423,31 @@ with ai_tab:
                         df.at[idx, "Assigned To"] = correct_member
                         reassigned += 1
 
-                st.session_state.results["df"] = df  # 🧠 Update the results table
-                st.success(f"✅ Reassigned {reassigned} tasks in your Results tab.")
+                # 🔁 Save changes into session state
+                if "results" in st.session_state:
+                    st.session_state.results["df"] = df
+                else:
+                    st.session_state.results = {"df": df}
+
+                st.success(f"✅ Reassigned {reassigned} tasks based on component expertise.")
                 st.dataframe(df[["ID", "Title", "Component", "Assigned To"]], use_container_width=True)
 
                 st.session_state.ai_messages.append({
                     "role": "assistant",
-                    "content": f"I reassigned {reassigned} tasks based on component expertise. Check the Results tab for updated assignments."
+                    "content": f"I reassigned {reassigned} tasks based on component expertise. Check the Results tab to see updates."
                 })
+
         else:
-            # Normal AI chat reply
+            # 🔁 Regular AI reply using OpenRouter + OpenAI
             context = f"""You are an expert sprint planning assistant.
 
-There are {len(df)} tasks. Component expertise is:
+Component expertise is:
 """ + "\n".join([f"- {m} → {c}" for m, c in expertise_dict.items()])
 
             if not mismatches.empty:
-                context += "\n\n⚠️ Mismatches:\n" + "\n".join(
-                    f"- {r['Title']} is {r['Component']} but assigned to {r['Assigned To']}"
-                    for _, r in mismatches.iterrows()
-                )
+                context += "\n\n⚠️ Mismatches detected:\n"
+                for _, row in mismatches.iterrows():
+                    context += f"- '{row['Title']}' assigned to {row['Assigned To']} but it's {row['Component']}\n"
 
             context += f"\n\nUser Prompt: {prompt}"
 
@@ -1451,7 +1457,7 @@ There are {len(df)} tasks. Component expertise is:
 
                 headers = {
                     "Authorization": f"Bearer {api_key}",
-                    "HTTP-Referer": "https://localhost",
+                    "HTTP-Referer": "https://localhost",  # Replace for deployment
                     "Content-Type": "application/json"
                 }
 
@@ -1493,7 +1499,7 @@ There are {len(df)} tasks. Component expertise is:
                 message_placeholder.markdown(full_response)
                 st.session_state.ai_messages.append({"role": "assistant", "content": full_response})
 
-    # Quick actions
+    # 🔘 Quick actions
     st.markdown("### Quick Actions")
     col1, col2, col3 = st.columns(3)
 
