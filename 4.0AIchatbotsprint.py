@@ -1357,49 +1357,40 @@ ai_tab = st.tabs(["6. AI Suggestions"])[0]
 
 with ai_tab:
     st.header("AI Suggestions and Insights")
-    st.markdown("Powered by Puter.com (Free OpenAI Proxy)")
+    st.markdown("Powered by DeepSeek AI")
 
-    # Initialize chat history in session state if not present
     if "ai_messages" not in st.session_state:
         st.session_state.ai_messages = [
             {"role": "assistant", "content": "Hello! I'm your sprint planning assistant. How can I help you with your task assignments today?"}
         ]
 
-    # Display chat messages
     for message in st.session_state.ai_messages:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # API Key Input (optional for Puter)
-    api_key = st.text_input("Puter API Key (Optional)", type="password", key="ai_api_key")
+    api_key = st.text_input("DeepSeek API Key", type="password", key="ai_api_key")
 
     if st.session_state.df_tasks is None:
         st.info("Please upload task data in the Upload Tasks tab first.")
         st.stop()
 
-    # Extract component assignments from the data
     component_assignments = {}
+    component_col = None
     if "Unnamed: 11" in st.session_state.df_tasks.columns:
         component_col = "Unnamed: 11"
     elif "Component" in st.session_state.df_tasks.columns:
         component_col = "Component"
-    else:
-        component_col = None
 
     if component_col:
         for _, row in st.session_state.df_tasks.iterrows():
             if pd.notna(row["Assigned To"]) and pd.notna(row[component_col]):
-                if row["Assigned To"] not in component_assignments:
-                    component_assignments[row["Assigned To"]] = set()
-                component_assignments[row["Assigned To"]].add(row[component_col])
+                component_assignments.setdefault(row["Assigned To"], set()).add(row[component_col])
 
-    # Chat input
     if prompt := st.chat_input("Ask about your sprint plan..."):
         st.session_state.ai_messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
             st.markdown(prompt)
 
-        # Context for the model
         context = f"""You are an expert sprint planning assistant. The user has provided their task data and is asking for help. 
 
 Task Data Overview:
@@ -1432,12 +1423,12 @@ Sample task data (first 5 rows):
             full_response = ""
 
             headers = {
-                "Authorization": f"Bearer {api_key}" if api_key else "Bearer ",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
 
             body = {
-                "model": "gpt-3.5-turbo",
+                "model": "deepseek-chat",
                 "messages": [{"role": "system", "content": context}] +
                             [msg for msg in st.session_state.ai_messages if msg["role"] != "assistant"],
                 "temperature": 0.7,
@@ -1447,7 +1438,7 @@ Sample task data (first 5 rows):
 
             try:
                 with requests.post(
-                    "https://api.puter.com/openai/v1/chat/completions",
+                    "https://api.deepseek.com/v1/chat/completions",
                     headers=headers,
                     json=body,
                     stream=True
@@ -1473,10 +1464,8 @@ Sample task data (first 5 rows):
 
             message_placeholder.markdown(full_response)
 
-        # Save assistant message
         st.session_state.ai_messages.append({"role": "assistant", "content": full_response})
 
-    # Quick actions
     st.markdown("### Quick Actions")
     col1, col2, col3 = st.columns(3)
 
@@ -1504,7 +1493,6 @@ Sample task data (first 5 rows):
             })
             st.rerun()
 
-    # Clear conversation
     if st.button("Clear Conversation"):
         st.session_state.ai_messages = [
             {"role": "assistant", "content": "Hello! I'm your sprint planning assistant. How can I help you with your task assignments today?"}
